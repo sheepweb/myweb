@@ -6,7 +6,6 @@ import { ElMessage } from '@/utils/elementPlusServices'
 
 const SECURE_STORAGE_KEY = 'cboard_secure_'
 const ACCESS_TOKEN_TTL = 60 * 60 * 1000
-const LOGIN_HANDOFF_STORAGE_PREFIX = 'cboard_login_handoff_'
 const UserLayout = () => import('@/components/layout/UserLayout.vue')
 const AdminLayout = () => import('@/components/layout/AdminLayout.vue')
 
@@ -95,6 +94,7 @@ const routes = [
 ]
 const router = createRouter({ history: createWebHistory(), routes })
 const ADMIN_USER_TTL = 30 * 24 * 60 * 60 * 1000 // 30天
+const LOGIN_HANDOFF_STORAGE_PREFIX = 'cboard_login_handoff_'
 const getStorageMode = (key) => {
   const storageKey = `${SECURE_STORAGE_KEY}${key}`
   try {
@@ -105,17 +105,6 @@ const getStorageMode = (key) => {
   }
   return null
 }
-const saveAdminAuth = (adminToken, adminUser) => {
-  try {
-    const adminData = typeof adminUser === 'string' ? JSON.parse(adminUser) : adminUser
-    if (adminData?.is_admin) {
-      secureStorage.set('admin_token', adminToken, false, ACCESS_TOKEN_TTL)
-      secureStorage.set('admin_user', adminData, false, ADMIN_USER_TTL)
-    }
-  } catch (e) {
-    if (process.env.NODE_ENV === 'development') console.debug('saveAdminAuth parse failed', e)
-  }
-}
 const readLoginHandoff = (sessionKey) => {
   if (!sessionKey) return null
   const localStorageKey = `${LOGIN_HANDOFF_STORAGE_PREFIX}${sessionKey}`
@@ -124,7 +113,11 @@ const readLoginHandoff = (sessionKey) => {
   localStorage.removeItem(localStorageKey)
   if (!raw) return null
   try {
-    return JSON.parse(raw)
+    const parsed = JSON.parse(raw)
+    if (!parsed || Date.now() - parsed.timestamp > 300000) {
+      return null
+    }
+    return parsed
   } catch (e) {
     if (process.env.NODE_ENV === 'development') console.debug('readLoginHandoff parse failed', e)
     return null
@@ -153,14 +146,6 @@ router.beforeEach(async (to, from, next) => {
     if (sessionKey) {
       const loginData = readLoginHandoff(sessionKey)
       if (loginData) {
-        if (Date.now() - loginData.timestamp > 300000) {
-          ElMessage.error('登录信息已过期')
-          return next('/login')
-        }
-        if (loginData.adminToken) saveAdminAuth(loginData.adminToken, loginData.adminUser)
-        if (loginData.adminRefreshToken) {
-          secureStorage.set('admin_refresh_token', loginData.adminRefreshToken, false, ADMIN_USER_TTL)
-        }
         const userData = { ...loginData.user, is_admin: false }
         const useSessionStorage = loginData.storage !== 'local'
         secureStorage.set('user_token', loginData.token, useSessionStorage, ACCESS_TOKEN_TTL)
@@ -172,6 +157,8 @@ router.beforeEach(async (to, from, next) => {
         useThemeStore().loadUserTheme().catch(() => {})
         return next({ path: to.path.startsWith('/admin') ? '/dashboard' : to.path, query: { ...to.query, sessionKey: undefined }, replace: true })
       }
+      ElMessage.error('登录信息已过期')
+      return next('/login')
     }
     const isAdminPath = to.path.startsWith('/admin')
     const userStorageMode = getStorageMode('user_token') || getStorageMode('user_refresh_token') || getStorageMode('user_data')

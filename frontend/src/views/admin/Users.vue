@@ -485,6 +485,12 @@
           </template>
           <el-input v-model="userForm.password" type="password" placeholder="请输入密码" show-password />
         </el-form-item>
+        <el-form-item :label="isMobile ? '' : '密码'" prop="password" v-else>
+          <template v-if="isMobile">
+            <div class="form-mobile-label">密码</div>
+          </template>
+          <el-input v-model="userForm.password" type="password" placeholder="留空则不修改密码" show-password />
+        </el-form-item>
         <el-form-item :label="isMobile ? '' : '状态'" prop="status">
           <template v-if="isMobile">
             <div class="form-mobile-label">状态 <span class="required">*</span></div>
@@ -665,6 +671,7 @@ import {
 import { adminAPI } from '@/utils/api'
 import { formatDate as formatDateUtil } from '@/utils/date'
 import { debounce } from '@/composables/useDebounce'
+import { useMobile } from '@/composables/useMobile'
 import UserDetailDialog from './components/UserDetailDialog.vue'
 import dayjs from 'dayjs'
 import timezone from 'dayjs/plugin/timezone'
@@ -720,7 +727,7 @@ export default {
     const nodeSearchKeyword = ref('')
     const selectedNodeId = ref(null)
     const assigningNode = ref(false)
-    const isMobile = ref(window.innerWidth <= 768)
+    const isMobile = useMobile()
     const defaultSort = ref({ prop: 'created_at', order: 'descending' })
     const tableRef = ref(null)
     // 用户表单相关
@@ -752,8 +759,20 @@ export default {
         { min: 2, max: 20, message: '用户名长度在2到20个字符', trigger: 'blur' }
       ],
       password: [
-        { required: true, message: '请输入密码', trigger: 'blur' },
-        { min: 6, message: '密码长度不能少于6位', trigger: 'blur' }
+        {
+          validator: (rule, value, callback) => {
+            if (!editingUser.value && !value) {
+              callback(new Error('请输入密码'))
+              return
+            }
+            if (value && value.length < 6) {
+              callback(new Error('密码长度不能少于6位'))
+              return
+            }
+            callback()
+          },
+          trigger: 'blur'
+        }
       ],
       status: [
         { required: true, message: '请选择状态', trigger: 'change' }
@@ -794,7 +813,8 @@ export default {
           is_verified: Boolean(user.is_verified),
           note: user.notes || '', password: '',
           balance: user.balance || 0,
-          device_limit: 5, expire_time: ''
+          device_limit: user.subscription?.device_limit || 5,
+          expire_time: user.subscription?.expire_time ? dayjs(user.subscription.expire_time).format('YYYY-MM-DDTHH:mm:ss') : ''
         })
 
         // 加载用户详情以获取订阅信息
@@ -828,7 +848,8 @@ export default {
             notes: userForm.note || null,
             balance: userForm.balance,
             device_limit: userForm.device_limit,
-            expire_time: userForm.expire_time
+            expire_time: userForm.expire_time,
+            password: userForm.password || undefined
           })
           ElMessage.success('用户更新成功')
         } else {
@@ -888,12 +909,6 @@ export default {
       return subscription.is_expired ? '已过期' : `${subscription.days_until_expire}天后到期`
     }
     let resizeTimer = null
-    const handleResize = () => {
-      if (resizeTimer) clearTimeout(resizeTimer)
-      resizeTimer = setTimeout(() => {
-        isMobile.value = window.innerWidth <= 768
-      }, 150)
-    }
     const buildSearchParams = () => {
       const params = {
         page: currentPage.value,
@@ -1518,11 +1533,9 @@ export default {
     }
     onMounted(() => {
       loadUsers()
-      window.addEventListener('resize', handleResize)
       window.addEventListener('subscription-device-limit-updated', loadUsers)
     })
     onUnmounted(() => {
-      window.removeEventListener('resize', handleResize)
       window.removeEventListener('subscription-device-limit-updated', loadUsers)
       if (resizeTimer) clearTimeout(resizeTimer)
       saveTimers.forEach(timer => clearTimeout(timer))
